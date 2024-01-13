@@ -9,6 +9,8 @@ import os
 URL = "https://api.epitest.eu/me/2023" # Yeah, they did not update for now, bozo
 PING_EVERY = 5 * 60 # time in seconds for ping. If you go too high u might end up kicked, idk
 
+DEBUG = False
+
 TOKEN = os.getenv("TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 if not TOKEN or not WEBHOOK_URL:
@@ -21,7 +23,7 @@ WEBHOOK_CONTENT = """{
   "embeds": [
     {
       "title": "New automated test on project %NAME%",
-      "description": "The project %NAME% (codename %SLUG%:%MODULE%) got an automated test at %DATE%.\\nMain result : %PERCENT% % - %PREREQUIST%\\nDetailed results :\\n%SKILLS%\\n\\nCoding Style :",
+      "description": "The project %NAME% (codename %SLUG%:%MODULE%) got an automated test at %DATE%.\\nMain result : %PERCENT% % - %PREREQUIST%\\n\\nDetailed results :\\n%SKILLS%\\n\\nCoding Style :",
       "color": null,
       "fields": [
         {
@@ -56,9 +58,17 @@ def get_json():
         'Authorization': 'Bearer '+TOKEN,
         'Content-Type': 'applications/json'
     })
-    return r.json()
+    if r.content:
+        try:
+            return r.json()
+        except:
+            if DEBUG:
+                print("+ Invalid JSON data")
+            pass
+    return {}
 
 def send_webhook(data):
+    print("+ Posting webhook message")
     requests.post(WEBHOOK_URL, json=data)
 
 def load_date(date_str: str):
@@ -108,16 +118,20 @@ def check_and_send_webhooks(current: list, new: list):
         if not project.get("project").get("module"):
             continue
         pid = project.get("project").get("module").get("code") + ':' + project.get("project").get("slug")
+        if DEBUG:
+            print(f"+ Checking the old project {pid}")
         old_project = get_project_by_id(current, pid)
         if not old_project:
             old_project = {"date": "2000-01-01T00:00:00Z"}
         if load_date(project["date"]) > load_date(old_project["date"]):
             # Yeah, new ta
+            if DEBUG:
+                print("+ New project found, crafting Webhook")
             current_whook_data = {
                 "%NAME%": project.get("project").get("name"),
                 "%SLUG%": project.get("project").get("slug"),
                 "%MODULE%": project.get("project").get("module").get("code"),
-                "%DATE%": load_date(project.get("date")).strftime("%Y/%m/%d - %H:%M:%S"),
+                "%DATE%": (load_date(project.get("date")) + datetime.timedelta(hours=1)).strftime("%Y/%m/%d - %H:%M:%S"),
                 "%RUNID%": project.get("results").get("testRunId"),
                 "%LOGINS%": ', '.join(
                     project.get("results").get("testRunId") if type(project.get("results").get("testRunId")) == list else []
@@ -128,7 +142,7 @@ def check_and_send_webhooks(current: list, new: list):
                     2: "Prerequisites met"
                 }[project.get("results").get("prerequisites")] or "Invalid value",
                 "%PERCENT%": get_percents(project.get("results").get("skills")),
-                "%SKILLS%": '\\n'.join([
+                "%SKILLS%": '\\n\\n'.join([
                     f"{exo} : {get_skill_formated(skills)}" for exo, skills in project.get("results").get("skills").items()
                 ]),
                 "%FATAL%": get_with_type(project.get("results").get("externalItems"), "lint.fatal"),
@@ -139,6 +153,9 @@ def check_and_send_webhooks(current: list, new: list):
             whook = WEBHOOK_CONTENT
             for k, v in current_whook_data.items():
                 whook = whook.replace(k, str(v).replace('"', '\\"'))
+            if DEBUG:
+                print("+ Webhook crafted sucessfully, output JSON :")
+                print(whook)
             send_webhook(json.loads(whook))
 
 
@@ -146,6 +163,11 @@ current_state = get_json()
 
 while 1:
     time.sleep(PING_EVERY)
+    if DEBUG:
+        print("+ Quering the website")
     data = get_json()
-    check_and_send_webhooks(current_state, data)
+    if data:
+        check_and_send_webhooks(current_state, data)
+    elif DEBUG:
+        print("+ No data got, ignoring this time (might come from invalid TOKEN, I guess)")
     current_state = data
